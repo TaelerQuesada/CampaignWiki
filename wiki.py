@@ -1653,6 +1653,33 @@ def extract(text, src_file, clipboard, context, chunk_size, stub_threshold, prio
 
     _process_entities(entities, vault, client, index, dry_run, stub_threshold)
 
+    # Update existing pages linked FROM the new entities that weren't part of this extraction
+    processed_lower = {e.get("name", "").lower() for e in entities}
+    related_names: dict[str, str] = {}  # name -> first entity that linked it
+    for e in entities:
+        for link in e.get("links", []):
+            if link and link.lower() not in processed_lower:
+                related_names.setdefault(link, e.get("name", ""))
+
+    if related_names:
+        index = load_index(vault)   # reload — index was updated by _process_entities
+        hit_pages: list[tuple[Path, str]] = []
+        for link_name in related_names:
+            result = find_existing_anywhere(vault, link_name, slugify(link_name))
+            if result:
+                hit_pages.append((result[0], link_name))
+
+        if hit_pages:
+            click.echo(f"\nUpdating {len(hit_pages)} related page(s) with new context...")
+            for page_path, link_name in hit_pages:
+                rel = page_path.relative_to(vault)
+                click.echo(f"  Merging: {rel}")
+                if not dry_run:
+                    existing = page_path.read_text(encoding="utf-8")
+                    merged   = merge_note(client, existing,
+                                          f"New lore context:\n\n{text}", link_name)
+                    page_path.write_text(merged, encoding="utf-8")
+
 
 @cli.command()
 @click.argument("transcript_file", type=click.Path(exists=True))
