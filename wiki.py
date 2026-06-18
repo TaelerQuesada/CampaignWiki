@@ -258,6 +258,53 @@ Rules — follow strictly:
 10. Return ONLY the complete updated markdown — no code fences, no preamble\
 """
 
+FILL_SYSTEM = """\
+You are a campaign wiki assistant. An entity is referenced across existing wiki notes
+but has no page of its own. You are given every snippet of text that mentions it,
+labelled with the note it came from.
+
+Your task: produce a single JSON entity document capturing everything that can be
+INFERRED from the references. Strict rules:
+- Do NOT invent details not supported by the references
+- Infer the entity type from context:
+    npc     — a person, creature, or named individual
+    pc      — a player character
+    place   — a location, building, region, dungeon
+    faction — an organisation, group, clan, guild, cult
+    lore    — a piece of history, legend, religion, or world knowledge
+    event   — a specific named occurrence (battle, ceremony, disaster)
+    item    — an object, weapon, artifact
+    quest   — a mission or plot thread
+    secret  — hidden information the players may not know
+- Set significance 1–5 based on how often and how meaningfully it is referenced
+- Set reliability based on how the references treat the information
+- Set unknown_identity: true if the true nature of the entity is unclear
+- Populate quote only if a reference contains a memorable line — never invent one
+- Leave data fields empty rather than guessing
+
+Return ONLY this JSON — no prose, no code fences:
+{
+  "entities": [
+    {
+      "type": "...",
+      "name": "...",
+      "slug": "kebab-case",
+      "aliases": [],
+      "summary": "one sentence — what is known from references",
+      "significance": 3,
+      "unknown_identity": false,
+      "reliability": "unknown",
+      "source": "inferred from vault references",
+      "quote": "",
+      "quote_attribution": "",
+      "tags": [],
+      "links": [],
+      "data": {}
+    }
+  ]
+}\
+"""
+
 # ── Config helpers ────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
@@ -2300,6 +2347,183 @@ def audit():
     click.echo(sep)
 
 
+def _gather_reference_snippets(vault: Path, entity_name: str, context_chars: int = 400) -> list[dict]:
+    """Find every mention of entity_name in the vault and return surrounding context snippets."""
+    pattern = re.compile(r"\[\[" + re.escape(entity_name) + r"(?:[|\]][^\]]*)?(?:\]\])", re.IGNORECASE)
+    # Also match without closing — partial link check
+    loose   = re.compile(re.escape(entity_name), re.IGNORECASE)
+    snippets: list[dict] = []
+
+    for md_file in vault.rglob("*.md"):
+        try:
+            content = md_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if entity_name.lower() not in content.lower():
+            continue
+        # Find all positions of the name
+        for m in loose.finditer(content):
+            start = max(0, m.start() - context_chars // 2)
+            end   = min(len(content), m.end() + context_chars // 2)
+            snippet = content[start:end].strip()
+            # Strip frontmatter from snippets — not useful as context
+            snippet = re.sub(r"^---\n.*?\n---\n", "", snippet, flags=re.DOTALL).strip()
+            if snippet:
+                snippets.append({
+                    "source_note": md_file.stem,
+                    "snippet":     snippet,
+                })
+    # Deduplicate very similar snippets
+    seen: list[str] = []
+    unique = []
+    for s in snippets:
+        if not any(_name_sim(s["snippet"][:80], x[:80]) > 0.9 for x in seen):
+            seen.append(s["snippet"])
+            unique.append(s)
+    return unique
+
+
+@cli.command()
+@click.argument("name", required=False)
+@click.option("--all",   "fill_all", is_flag=True, help="Fill every broken wikilink in the vault")
+@click.option("--yes",   "auto_yes", is_flag=True, help="Skip confirmation prompts (use with --all)")
+@click.option("--force", is_flag=True, help="Fill even if a note already exists (useful for empty stubs)")
+@click.option("--dry-run", is_flag=True, help="Preview without writing files")
+@click.option("--stub-threshold", default=3, show_default=True, metavar="1-5",
+              help="Significance below which new entities become stubs")
+def fill(name, fill_all, auto_yes, force, dry_run, stub_threshold):
+    """Generate a note for a referenced-but-missing entity.
+
+    Collects every snippet of text that mentions the entity across the vault,
+    then asks Claude to build a note from what can be inferred — no invented details.
+
+    Examples:
+
+      python wiki.py fill "Voice in Runeigil's Head"
+
+      python wiki.py fill --all
+
+      python wiki.py fill --all --yes
+    """
+    cfg    = load_config()
+    vault  = get_vault(cfg)
+    client = get_client(cfg)
+    index  = load_index(vault)
+
+    if not name and not fill_all:
+        click.echo("Provide an entity name or use --all to process every broken link.", err=True)
+        return
+
+    # ── Build list of targets ─────────────────────────────────────────────────
+    if fill_all:
+        # Collect unique broken wikilinks across the vault
+        all_notes: dict[str, Path] = {md.stem.lower(): md for md in vault.rglob("*.md")}
+        broken: dict[str, int] = {}  # name -> reference count
+        for md_file in vault.rglob("*.md"):
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            for lnk in re.findall(r"\[\[([^\]|#\n]+?)(?:[|#][^\]]*)?\]\]", content):
+                lnk = lnk.strip()
+                if lnk.lower() not in all_notes:
+                    broken[lnk] = broken.get(lnk, 0) + 1
+        if not broken:
+            click.echo("No broken wikilinks found.")
+            return
+        targets = sorted(broken.items(), key=lambda x: -x[1])
+        click.echo(f"Found {len(targets)} unreferenced entities:\n")
+        for n, count in targets:
+            click.echo(f"  ({count:3d} refs)  {n}")
+        click.echo("")
+    else:
+        targets = [(name, None)]
+
+    # ── Process each target ───────────────────────────────────────────────────
+    filled = skipped = 0
+    for target_name, ref_count in targets:
+        # Skip if a note already exists (unless --force)
+        existing_result = find_existing_anywhere(vault, target_name, slugify(target_name))
+        if existing_result:
+            existing_path = existing_result[0]
+            try:
+                body = existing_path.read_text(encoding="utf-8")
+                fm_match = re.match(r"^---\n.*?\n---\n", body, re.DOTALL)
+                body_text = body[fm_match.end():].strip() if fm_match else body.strip()
+            except Exception:
+                body_text = ""
+            is_empty = len(body_text) < 80  # frontmatter-only or near-empty
+            if force or is_empty:
+                if is_empty:
+                    click.echo(f"  Note exists but appears empty — refilling: {existing_path.relative_to(vault)}")
+                else:
+                    click.echo(f"  --force: refilling existing note: {existing_path.relative_to(vault)}")
+            else:
+                click.echo(f"  Already exists: {existing_path.relative_to(vault)} — use --force to regenerate")
+                continue
+
+        if fill_all and not auto_yes:
+            answer = click.prompt(f"Generate note for '{target_name}'? [y/n/q]",
+                                  default="n", show_default=False)
+            if answer.lower() == "q":
+                break
+            if answer.lower() != "y":
+                skipped += 1
+                continue
+
+        snippets = _gather_reference_snippets(vault, target_name)
+        if not snippets:
+            click.echo(f"  No context found for '{target_name}' — skipping", err=True)
+            skipped += 1
+            continue
+
+        ref_count_str = f" ({len(snippets)} snippet(s))" if fill_all else f" — {len(snippets)} snippet(s) found"
+        click.echo(f"Filling '{target_name}'{ref_count_str}...")
+
+        # Build prompt
+        snippet_block = "\n\n".join(
+            f"[From: {s['source_note']}]\n{s['snippet']}" for s in snippets[:20]
+        )
+        prompt = (
+            f"Entity name: {target_name}\n\n"
+            f"References found in the vault:\n\n{snippet_block}"
+        )
+
+        raw, stop_reason = _call(client, FILL_SYSTEM, prompt)
+        if stop_reason == "max_tokens":
+            click.echo(f"  Warning: response hit token limit for '{target_name}'", err=True)
+
+        raw_clean = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
+        raw_clean = re.sub(r"\s*```\s*$", "", raw_clean, flags=re.MULTILINE).strip()
+        try:
+            entities = json.loads(raw_clean).get("entities", [])
+        except json.JSONDecodeError:
+            entities = _salvage_entities(raw_clean)
+        if not entities:
+            click.echo(f"  Could not parse entity for '{target_name}' — skipping", err=True)
+            skipped += 1
+            continue
+
+        # Force the name to match what's in the vault links
+        entities[0]["name"] = target_name
+
+        if dry_run:
+            click.echo(f"  [dry-run] Would create: {entities[0].get('type', '?')} — {target_name}")
+            filled += 1
+            continue
+
+        _process_entities(entities, vault, client, index, dry_run=False,
+                          stub_threshold=stub_threshold, _skip_dashboard=True)
+        filled += 1
+
+    if filled or skipped:
+        click.echo(f"\nDone — {filled} generated, {skipped} skipped.")
+        if filled and not dry_run:
+            dash = generate_dashboard(vault, index)
+            tl   = generate_timeline(vault)
+            click.echo(f"Dashboard + Timeline updated.")
+
+
 @cli.command()
 def reindex():
     """Rebuild entity-index.json by scanning all vault markdown files."""
@@ -2361,6 +2585,7 @@ def _process_entities(
     index: dict,
     dry_run: bool,
     stub_threshold: int = 3,
+    _skip_dashboard: bool = False,
 ):
     click.echo(f"Found {len(entities)} entities — writing notes...")
     counts: dict[str, list] = {"created": [], "stub": [], "updated": []}
@@ -2393,10 +2618,11 @@ def _process_entities(
         n_stubs   = len(counts["stub"])
         n_updated = len(counts["updated"])
         click.echo(f"\nDone — {n_created} created, {n_stubs} stubs, {n_updated} updated")
-        dash = generate_dashboard(vault, index)
-        click.echo(f"Dashboard updated: {dash.relative_to(vault)}")
-        tl = generate_timeline(vault)
-        click.echo(f"Timeline updated:  {tl.relative_to(vault)}")
+        if not _skip_dashboard:
+            dash = generate_dashboard(vault, index)
+            click.echo(f"Dashboard updated: {dash.relative_to(vault)}")
+            tl = generate_timeline(vault)
+            click.echo(f"Timeline updated:  {tl.relative_to(vault)}")
 
 
 if __name__ == "__main__":
