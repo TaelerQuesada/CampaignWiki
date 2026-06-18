@@ -1023,6 +1023,84 @@ def generate_timeline(vault: Path) -> Path:
     return out_path
 
 
+_INDEX_PAGES: dict[str, str] = {
+    "Quest Board.md": """\
+# Quest Board
+
+## Active & Available
+
+```dataview
+TABLE quest_giver AS "Given By", location AS "Location", summary AS "Summary"
+FROM "30 Lore/Quests"
+WHERE status = "active" OR status = "available" OR status = "rumored"
+SORT significance DESC
+```
+
+## Completed & Failed
+
+```dataview
+TABLE quest_giver AS "Given By", status AS "Status", summary AS "Summary"
+FROM "30 Lore/Quests"
+WHERE status = "completed" OR status = "failed"
+SORT file.mtime DESC
+```
+""",
+
+    "Active Cast.md": """\
+# Active Cast
+
+```dataview
+TABLE role AS "Role", location AS "Location", status AS "Status", significance AS "Sig"
+FROM "10 Characters/NPCs" OR "10 Characters/PCs"
+WHERE status = "alive" OR status = "unknown" OR status = "missing" OR status = "incapacitated"
+SORT significance DESC
+```
+
+## Deceased
+
+```dataview
+TABLE role AS "Role", summary AS "Summary"
+FROM "10 Characters/NPCs" OR "10 Characters/PCs"
+WHERE status = "dead" OR status = "undead"
+SORT significance DESC
+```
+""",
+
+    "Factions.md": """\
+# Factions
+
+```dataview
+TABLE faction_type AS "Type", leader AS "Leader", headquarters AS "HQ", pc_relations AS "Relations", significance AS "Sig"
+FROM "10 Characters/Factions"
+SORT significance DESC
+```
+""",
+
+    "Secrets.md": """\
+# Secrets
+
+```dataview
+TABLE summary AS "Secret", reliability AS "Reliability", significance AS "Sig"
+FROM "_System/Secrets"
+SORT significance DESC
+```
+""",
+}
+
+
+def generate_indexes(vault: Path, force: bool = False) -> int:
+    idx_dir = vault / "_System" / "Indexes"
+    idx_dir.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for filename, content in _INDEX_PAGES.items():
+        dest = idx_dir / filename
+        if dest.exists() and not force:
+            continue
+        dest.write_text(content, encoding="utf-8")
+        written += 1
+    return written
+
+
 def as_bullet_list(val) -> str:
     if isinstance(val, list):
         return "\n".join(f"- {item}" for item in val)
@@ -2140,6 +2218,32 @@ def timeline():
 
 
 @cli.command()
+@click.option("--force", is_flag=True, help="Overwrite existing index pages")
+def indexes(force):
+    """Install Dataview index pages into _System/Indexes/.
+
+    Creates four live-query pages in Obsidian (requires the Dataview plugin):
+
+    \b
+      Quest Board   — active/available quests vs completed/failed
+      Active Cast   — living NPCs/PCs by significance, plus a deceased section
+      Factions      — all factions with leader, HQ, and PC relations
+      Secrets       — all secret notes sorted by significance
+
+    Pages are also created automatically on every ingest/fill run (if missing).
+    Use --force to overwrite and reset them to the default templates.
+    """
+    cfg   = load_config()
+    vault = get_vault(cfg)
+    written = generate_indexes(vault, force=force)
+    if written:
+        click.echo(f"Wrote {written} index page(s) to _System/Indexes/")
+        click.echo("Install the Dataview plugin in Obsidian to activate the live queries.")
+    else:
+        click.echo("Index pages already exist. Use --force to overwrite.")
+
+
+@cli.command()
 def audit():
     """Health check the vault — surface issues that need attention.
 
@@ -2523,6 +2627,7 @@ def fill(name, fill_all, auto_yes, force, dry_run, stub_threshold):
         if filled and not dry_run:
             dash = generate_dashboard(vault, index)
             tl   = generate_timeline(vault)
+            generate_indexes(vault)
             click.echo(f"Dashboard + Timeline updated.")
 
 
@@ -2625,6 +2730,7 @@ def _process_entities(
             click.echo(f"Dashboard updated: {dash.relative_to(vault)}")
             tl = generate_timeline(vault)
             click.echo(f"Timeline updated:  {tl.relative_to(vault)}")
+            generate_indexes(vault)
 
 
 if __name__ == "__main__":
