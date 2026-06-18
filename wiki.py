@@ -2130,6 +2130,116 @@ def list_entries(etype, unknown, rel_filter):
             click.echo(f"  {item['Name']}{alias_str}{ref_str}")
 
 
+def _build_wikify_index(index: dict) -> tuple[list[str], dict[str, str]]:
+    """Return (names_longest_first, lowercase_variant -> canonical_name) from entity index."""
+    name_to_canon: dict[str, str] = {}
+    for entry in index.get("Entities", []):
+        canonical = entry.get("Name", "").strip()
+        if not canonical or len(canonical) <= 2:
+            continue
+        name_to_canon[canonical.lower()] = canonical
+        for alias in entry.get("Aliases", []):
+            alias = str(alias).strip()
+            if alias and len(alias) > 2:
+                name_to_canon[alias.lower()] = canonical
+    names = sorted(name_to_canon.keys(), key=len, reverse=True)
+    return names, name_to_canon
+
+
+def _wikify_text(text: str, names: list[str], name_to_canon: dict[str, str], own_name: str = "") -> str:
+    """Insert [[wikilinks]] for entity name mentions in a plain-text string.
+
+    Skips text already inside [[...]] or backtick code spans.
+    Processes all names in a single regex pass (longest-first order) to avoid
+    partial-match interference.
+    """
+    own_lower = own_name.lower()
+    applicable = [n for n in names
+                  if n != own_lower and name_to_canon.get(n, "").lower() != own_lower]
+    if not applicable:
+        return text
+
+    combined = re.compile(
+        r'\b(' + '|'.join(re.escape(n) for n in applicable) + r')\b',
+        re.IGNORECASE,
+    )
+
+    def _replace(m: re.Match) -> str:
+        matched = m.group(0)
+        canonical = name_to_canon.get(matched.lower(), matched)
+        if matched == canonical:
+            return f"[[{canonical}]]"
+        return f"[[{canonical}|{matched}]]"
+
+    # Tokenise: split on existing [[...]] and `code spans` so we only touch plain text
+    segments = re.split(r'(\[\[.*?\]\]|`[^`\n]*`)', text)
+    result = []
+    for i, seg in enumerate(segments):
+        if i % 2 == 1:          # delimiter token — wikilink or code span
+            result.append(seg)
+        else:
+            result.append(combined.sub(_replace, seg))
+    return "".join(result)
+
+
+def _wikify_vault(vault: Path, index: dict, dry_run: bool = False,
+                  only_names: list[str] | None = None) -> int:
+    """Scan all vault notes and insert [[wikilinks]] for plain-text entity name mentions.
+
+    only_names: if provided, only scan notes that contain at least one of these
+    strings (used for targeted post-extract runs).
+    """
+    names, name_to_canon = _build_wikify_index(index)
+    if not names:
+        return 0
+
+    if only_names:
+        # Restrict the pattern to the supplied names only
+        subset_lower = {n.lower() for n in only_names}
+        alias_expansion: set[str] = set()
+        for entry in index.get("Entities", []):
+            if entry.get("Name", "").lower() in subset_lower:
+                alias_expansion.add(entry["Name"].lower())
+                for a in entry.get("Aliases", []):
+                    alias_expansion.add(str(a).lower())
+        names = [n for n in names if n in alias_expansion or name_to_canon.get(n, "").lower() in subset_lower]
+
+    if not names:
+        return 0
+
+    scan_pattern = re.compile(
+        r'\b(' + '|'.join(re.escape(n) for n in names) + r')\b',
+        re.IGNORECASE,
+    )
+
+    changed = 0
+    for md_file in vault.rglob("*.md"):
+        rel = str(md_file.relative_to(vault))
+        if rel.startswith("_System"):
+            continue
+        try:
+            content = md_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        # Quick pre-check: any candidate name present at all?
+        if not scan_pattern.search(content):
+            continue
+
+        fm_match = re.match(r"^---\n.*?\n---\n", content, re.DOTALL)
+        fm_part  = content[:fm_match.end()] if fm_match else ""
+        body     = content[fm_match.end():]  if fm_match else content
+
+        new_body = _wikify_text(body, names, name_to_canon, md_file.stem)
+        if new_body != body:
+            changed += 1
+            if not dry_run:
+                md_file.write_text(fm_part + new_body, encoding="utf-8")
+            click.echo(f"  {'[dry] ' if dry_run else ''}Linked: {md_file.relative_to(vault)}")
+
+    return changed
+
+
 @cli.command()
 @click.option("--dry-run", is_flag=True, help="Preview changes without writing")
 def fixlinks(dry_run):
@@ -2192,6 +2302,32 @@ def fixlinks(dry_run):
         click.echo(f"\n[Dry run] {fixed_fields} field(s) in {fixed_files} file(s) would be converted.")
     else:
         click.echo(f"\nFixed {fixed_fields} field(s) across {fixed_files} file(s).")
+
+
+@cli.command()
+@click.option("--dry-run", is_flag=True, help="Preview without writing")
+def linkify(dry_run):
+    """Scan all vault notes and insert [[wikilinks]] for known entity names.
+
+    Reads every note body and converts plain-text mentions of entity names
+    (and their aliases) into Obsidian wikilinks.  Existing [[links]] and
+    inline code spans are left untouched.
+
+    Run this after extract, ingest, or fill to update existing pages with
+    cross-references to any newly created entities.  It also runs automatically
+    at the end of every extract/session/ingest.
+    """
+    cfg   = load_config()
+    vault = get_vault(cfg)
+    index = load_index(vault)
+    click.echo("Scanning vault for entity name mentions...")
+    n = _wikify_vault(vault, index, dry_run=dry_run)
+    if n == 0:
+        click.echo("No unlinked entity mentions found.")
+    elif dry_run:
+        click.echo(f"\n[Dry run] {n} note(s) would be updated.")
+    else:
+        click.echo(f"\nUpdated {n} note(s).")
 
 
 @cli.command()
@@ -2741,6 +2877,12 @@ def _process_entities(
             tl = generate_timeline(vault)
             click.echo(f"Timeline updated:  {tl.relative_to(vault)}")
             generate_indexes(vault)
+            # Auto-linkify: add [[wikilinks]] in existing notes for newly created entities
+            new_names = [entry.rsplit(" (", 1)[0] for entry in counts["created"]]
+            if new_names:
+                n_linked = _wikify_vault(vault, index, only_names=new_names)
+                if n_linked:
+                    click.echo(f"Linked {n_linked} note(s) to new entities.")
 
 
 if __name__ == "__main__":
