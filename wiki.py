@@ -2444,6 +2444,8 @@ def fill(name, fill_all, auto_yes, force, dry_run, stub_threshold):
     for target_name, ref_count in targets:
         # Skip if a note already exists (unless --force)
         existing_result = find_existing_anywhere(vault, target_name, slugify(target_name))
+        if existing_result and _is_excluded_from_dedup(existing_result[0], target_name):
+            existing_result = None  # distinct exclusion overrides fuzzy match
         if existing_result:
             existing_path = existing_result[0]
             try:
