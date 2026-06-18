@@ -1363,6 +1363,8 @@ def extract_entities(
     known_context: str = "",
     _depth: int = 0,
 ) -> list:
+    if not text or not text.strip():
+        return []
     parts = []
     if known_context:
         parts.append(known_context)
@@ -1381,7 +1383,9 @@ def extract_entities(
             if _depth < 3:
                 # Output was cut off — auto-split this chunk and retry both halves
                 mid   = len(text) // 2
-                split = text.rfind(" ", 0, mid) or mid
+                split = text.rfind(" ", 0, mid)
+                if split < 0:
+                    split = mid
                 indent = "  " * (_depth + 1)
                 click.echo(
                     f"{indent}Output too large — auto-splitting"
@@ -1596,7 +1600,13 @@ def extract(text, src_file, clipboard, context, chunk_size, stub_threshold, prio
             click.echo("Clipboard is empty.", err=True)
             sys.exit(1)
     elif src_file:
-        text = Path(src_file).read_text(encoding="utf-8")
+        try:
+            text = Path(src_file).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = Path(src_file).read_text(encoding="utf-8-sig")
+        if not text or not text.strip():
+            click.echo(f"File is empty: {src_file}", err=True)
+            sys.exit(1)
     elif not text:
         if not sys.stdin.isatty():
             text = sys.stdin.read()
