@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Config (stored in ~/.campaignwiki/ but just in case)
+config.json
+*.env
+.env
+
+# Sample vault — contains your actual campaign data
+samples/
+
+# OS
+.DS_Store
+Thumbs.db
