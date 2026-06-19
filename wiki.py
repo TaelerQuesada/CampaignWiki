@@ -1430,6 +1430,29 @@ def note_folder(vault: Path, etype: str) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 
+def find_existing_session(vault: Path, session_number) -> Path | None:
+    """Find a session note by session_number frontmatter — never by title similarity."""
+    if session_number is None:
+        return None
+    folder = vault / ENTITY_FOLDERS["session"]
+    if not folder.exists():
+        return None
+    target = str(session_number).strip()
+    for f in folder.glob("*.md"):
+        try:
+            content = f.read_text(encoding="utf-8")
+            fm_match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+            if not fm_match:
+                continue
+            fm = yaml.safe_load(fm_match.group(1)) or {}
+            existing_num = fm.get("session_number")
+            if existing_num is not None and str(existing_num).strip() == target:
+                return f
+        except Exception:
+            continue
+    return None
+
+
 def find_existing_note(vault: Path, etype: str, slug: str, name: str) -> Path | None:
     folder = note_folder(vault, etype)
     # Prefer display-name file (new convention), fall back to slug file (legacy)
@@ -1467,8 +1490,21 @@ def write_entity(
     # 1. Look in the expected type folder first
     existing = find_existing_note(vault, etype, slug, name)
 
+    # For sessions, match by session_number only — never by title similarity.
+    # Two sessions can have nearly identical titles (both in the same location)
+    # but are completely different notes.
+    if etype == "session" and not existing:
+        session_num = entity.get("data", {}).get("session_number")
+        existing = find_existing_session(vault, session_num)
+        if existing:
+            click.echo(
+                f"    [session] matched existing session #{session_num}: {existing.name}",
+                err=True,
+            )
+
     # 2. Cross-type fuzzy search — catches "Orr" finding "Oor", NPC dup of a PC, etc.
-    if not existing:
+    # Skipped for sessions — session dedup is handled exclusively by session_number above.
+    if not existing and etype != "session":
         result = find_existing_anywhere(vault, name, slug, own_type=etype)
         if result:
             candidate, found_type = result
@@ -1489,7 +1525,8 @@ def write_entity(
     # 3. Alias scan — catches identity reveals where old note lists new name as alias
     #    e.g. "Lady Morrova" arriving when "Skeletal Wizard" note has aliases: [Lady Morrova]
     #    OR new entity has aliases that match existing filenames (analyst flagged the reveal)
-    if not existing:
+    #    Skipped for sessions — session identity is determined by session_number only.
+    if not existing and etype != "session":
         result = find_by_alias(vault, name, slug)
         if result:
             existing, found_type = result
