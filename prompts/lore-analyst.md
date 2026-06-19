@@ -263,6 +263,7 @@ Return ONLY valid JSON — no prose, no code fences, no explanation before or af
   "content": "What is unknown or unexplained — as observable from the text.",
   "related_entities": ["...", "..."],
   "clues": ["Evidence or observations already present in the source."],
+  "who_might_know": ["Entities, factions, or locations that might have answers — use [[wikilinks]]."],
   "theories": ["Proposed explanations or speculation present in the text."],
   "how_to_resolve": "How this might be answered or investigated."
 }

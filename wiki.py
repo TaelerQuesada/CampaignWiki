@@ -93,7 +93,7 @@ quest   → status(active/completed/failed/rumored/available), quest_giver,
 session → session_number(int), in_game_date, real_date, location,
            participants(list), summary, events(list), loot_found(list),
            xp_awarded(int), cliffhanger
-mystery → content, related_entities(list), clues(list), theories(list), how_to_resolve
+mystery → content, related_entities(list), clues(list), who_might_know(list), theories(list), how_to_resolve
 
 Also score each entity's significance on a 1–5 scale:
   5 — central to this text (PC, major NPC, key location, primary plot item)
@@ -256,6 +256,47 @@ Rules — follow strictly:
      > — Attribution (if known)
    Only add when it fits naturally. Never invent one. If a quote already exists, preserve it.
 10. Return ONLY the complete updated markdown — no code fences, no preamble\
+"""
+
+MYSTERY_REGEN_SYSTEM = """\
+You are rewriting an old campaign wiki "secret" note (written from a DM perspective)
+into a "mystery" note (written from the players' perspective).
+
+The mystery format captures only what the party has WITNESSED, HEARD, or EXPERIENCED —
+it is player-facing. It does not contain DM-only hidden truths.
+
+Rewrite the note using ONLY these markdown sections, in this order:
+
+# {name}
+> One sentence: what is the unanswered question or unexplained phenomenon?
+
+## What Is Unknown
+The core question — what doesn't the party understand or have an answer to?
+
+## What the Party Knows
+Clues, observations, and evidence already available to the party from play.
+Use bullet points. Keep [[wikilinks]] to relevant entities.
+
+## Who Might Know
+NPCs, factions, locations, or scholars who might have answers — or who the party
+suspects might know. Use [[wikilinks]]. If none are known, write "Unknown."
+
+## Theories
+Working theories the party or NPCs have proposed. If none, omit this section.
+
+## How to Resolve
+How the party might find answers — who to ask, where to look, what to do.
+
+## Related
+Wikilinks to every related entity, one per line as  - [[Entity Name]]
+
+Rules:
+- Write entirely from the player's perspective — what they know, not what the DM knows
+- Preserve all [[wikilinks]] from the original
+- Do not invent new information not implied by the original note
+- If the original contained purely DM-only information with nothing player-observable,
+  write a minimal note focused on the observable mystery only
+- Return ONLY the markdown — no prose, no code fences, no explanation\
 """
 
 FILL_SYSTEM = """\
@@ -1192,6 +1233,7 @@ BODY_SECTIONS = {
     "mystery": [
         ("What Is Unknown", ["content"]),
         ("Clues & Observations", ["clues"]),
+        ("Who Might Know", ["who_might_know"]),
         ("Theories", ["theories"]),
         ("How to Resolve", ["how_to_resolve"]),
     ],
@@ -2948,6 +2990,66 @@ def merge(name_a, name_b, target, dry_run):
     index = load_index(vault)
     generate_dashboard(vault, index)
     click.echo("Done.")
+
+
+@cli.command("regen-mysteries")
+@click.option("--dry-run", is_flag=True, help="Preview filenames without rewriting")
+@click.option("--name", default=None, help="Rewrite a single mystery by name instead of all")
+def regen_mysteries(dry_run, name):
+    """Rewrite mystery notes from DM-secret framing to player-facing mystery framing.
+
+    Feeds every note in _System/Mysteries/ through Claude to recontextualise
+    the content: replaces 'How to Reveal / Impact / Revealed To' structure with
+    'What Is Unknown / What the Party Knows / Who Might Know / How to Resolve'.
+
+    Run once after migrating from secrets, or use --name to fix a single note.
+    """
+    cfg    = load_config()
+    vault  = get_vault(cfg)
+    client = get_client(cfg)
+
+    mystery_folder = vault / "_System" / "Mysteries"
+    if not mystery_folder.exists():
+        click.echo("No _System/Mysteries/ folder found.", err=True)
+        return
+
+    if name:
+        files = [f for f in mystery_folder.glob("*.md")
+                 if name.lower() in f.stem.lower()]
+        if not files:
+            click.echo(f"No mystery note matching '{name}'.", err=True)
+            return
+    else:
+        files = sorted(mystery_folder.glob("*.md"))
+
+    click.echo(f"Rewriting {len(files)} mystery note(s)...")
+    for md_file in files:
+        click.echo(f"  {'[dry] ' if dry_run else ''}{md_file.stem}")
+        if dry_run:
+            continue
+        try:
+            content = md_file.read_text(encoding="utf-8")
+        except Exception as e:
+            click.echo(f"    Error reading: {e}", err=True)
+            continue
+
+        prompt = (
+            f"Mystery name: {md_file.stem}\n\n"
+            f"ORIGINAL NOTE:\n---\n{content}\n---"
+        )
+        rewritten, stop_reason = _call(client, MYSTERY_REGEN_SYSTEM, prompt, max_tokens=4096)
+        if stop_reason == "max_tokens":
+            click.echo(f"    Warning: response truncated for '{md_file.stem}'", err=True)
+
+        # Strip accidental code fences
+        rewritten = re.sub(r"^```(?:markdown)?\s*", "", rewritten, flags=re.MULTILINE)
+        rewritten = re.sub(r"\s*```\s*$", "", rewritten, flags=re.MULTILINE).strip()
+
+        if rewritten:
+            md_file.write_text(rewritten + "\n", encoding="utf-8")
+
+    if not dry_run:
+        click.echo(f"\nDone. Run 'wiki.py reindex' to refresh the entity index.")
 
 
 @cli.command("migrate-secrets")

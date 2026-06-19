@@ -333,8 +333,9 @@ The JSON must exactly match this schema:
   "content": "What is unknown or unexplained — as witnessed or experienced by the party.",
   "related_entities": ["...", "..."],
   "clues": ["Evidence or observations the party already has."],
+  "who_might_know": ["NPCs, factions, or locations that might have answers — use [[wikilinks]]."],
   "theories": ["Working theories the party or NPCs have proposed."],
-  "how_to_resolve": "How the party might find answers."
+  "how_to_resolve": "How the party might find answers — who to ask, where to look."
 }
 ```
 
