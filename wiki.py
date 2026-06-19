@@ -2,7 +2,7 @@
 """
 CampaignWiki — Auto-documentation pipeline for tabletop RPG campaigns.
 
-Extracts entities (NPCs, places, lore, items, secrets, etc.) from AI responses
+Extracts entities (NPCs, places, lore, items, mysteries, etc.) from AI responses
 and session transcripts into Obsidian markdown notes with cross-references.
 
 Vault structure expected (matches your existing sample-vault):
@@ -54,8 +54,8 @@ ENTITY_FOLDERS = {
     "event":   "30 Lore/Events",
     "quest":   "30 Lore/Quests",
     "item":    "40 Items",
-    "session": "50 Sessions",
-    "secret":  "_System/Secrets",
+    "session":  "50 Sessions",
+    "mystery":  "_System/Mysteries",
 }
 
 INDEX_PATH = "_System/state/entity-index.json"
@@ -93,7 +93,7 @@ quest   → status(active/completed/failed/rumored/available), quest_giver,
 session → session_number(int), in_game_date, real_date, location,
            participants(list), summary, events(list), loot_found(list),
            xp_awarded(int), cliffhanger
-secret  → content, related_entities(list), impact, how_to_reveal, revealed_to(list)
+mystery → content, related_entities(list), clues(list), theories(list), how_to_resolve
 
 Also score each entity's significance on a 1–5 scale:
   5 — central to this text (PC, major NPC, key location, primary plot item)
@@ -196,7 +196,7 @@ out-of-character (OOC) table talk mixed into the in-game narrative.
 
 Your job:
 1. Separate in-character events from OOC table talk (rules discussions, jokes, side conversations)
-2. Extract ALL notable in-game entities: named NPCs, locations, items, lore, secrets, plot threads
+2. Extract ALL notable in-game entities: named NPCs, locations, items, lore, mysteries, plot threads
 3. Always create a "session" type entity that summarizes the whole session
 4. Cross-reference entities with each other using their names in the links list
 5. If PRIOR SESSION CONTEXT is provided above the transcript, use it to:
@@ -275,7 +275,7 @@ INFERRED from the references. Strict rules:
     event   — a specific named occurrence (battle, ceremony, disaster)
     item    — an object, weapon, artifact
     quest   — a mission or plot thread
-    secret  — hidden information the players may not know
+    mystery — an unanswered question or unexplained phenomenon witnessed by the party
 - Set significance 1–5 based on how often and how meaningfully it is referenced
 - Set reliability based on how the references treat the information
 - Set unknown_identity: true if the true nature of the entity is unclear
@@ -833,7 +833,7 @@ def generate_dashboard(vault: Path, index: dict) -> Path:
     rumored_items:      list[tuple[str, str, str]] = []
 
     for etype, folder_rel in ENTITY_FOLDERS.items():
-        if etype in ("session", "secret"):
+        if etype in ("session", "mystery"):
             continue
         folder = vault / folder_rel
         if not folder.exists():
@@ -1097,12 +1097,12 @@ SORT significance DESC
 ```
 """,
 
-    "Secrets.md": """\
-# Secrets
+    "Mysteries.md": """\
+# Mysteries
 
 ```dataview
-TABLE summary AS "Secret", reliability AS "Reliability", significance AS "Sig"
-FROM "_System/Secrets"
+TABLE summary AS "Mystery", reliability AS "Reliability", significance AS "Sig"
+FROM "_System/Mysteries"
 SORT significance DESC
 ```
 """,
@@ -1189,11 +1189,11 @@ BODY_SECTIONS = {
         ("Loot Found", ["loot_found"]),
         ("Cliffhanger", ["cliffhanger"]),
     ],
-    "secret": [
-        ("Details", ["content"]),
-        ("Impact", ["impact"]),
-        ("How to Reveal", ["how_to_reveal"]),
-        ("Revealed To", ["revealed_to"]),
+    "mystery": [
+        ("What Is Unknown", ["content"]),
+        ("Clues & Observations", ["clues"]),
+        ("Theories", ["theories"]),
+        ("How to Resolve", ["how_to_resolve"]),
     ],
 }
 
@@ -1210,7 +1210,7 @@ FM_FIELDS = {
                 "reliability", "source"],
     "quest":   ["status", "quest_giver", "location", "reliability", "source"],
     "session": ["session_number", "in_game_date", "real_date", "location"],
-    "secret":  [],
+    "mystery": [],
 }
 
 def entity_to_markdown(entity: dict) -> str:
@@ -2459,7 +2459,7 @@ def indexes(force):
       Quest Board   — active/available quests vs completed/failed
       Active Cast   — living NPCs/PCs by significance, plus a deceased section
       Factions      — all factions with leader, HQ, and PC relations
-      Secrets       — all secret notes sorted by significance
+      Mysteries     — all mystery notes sorted by significance
 
     Pages are also created automatically on every ingest/fill run (if missing).
     Use --force to overwrite and reset them to the default templates.
@@ -2548,8 +2548,8 @@ def audit():
                 missing_status.append((md_file, etype))
 
             # 4. Isolated — no wikilinks anywhere in the body
-            #    (secrets often have no body links by design — skip them)
-            if not body_links and etype not in ("secret",):
+            #    (mysteries often have no body links by design — skip them)
+            if not body_links and etype not in ("mystery",):
                 isolated.append((md_file, etype))
 
             # 5. Unknown identities
@@ -2948,6 +2948,79 @@ def merge(name_a, name_b, target, dry_run):
     index = load_index(vault)
     generate_dashboard(vault, index)
     click.echo("Done.")
+
+
+@cli.command("migrate-secrets")
+@click.option("--dry-run", is_flag=True, help="Preview without writing")
+def migrate_secrets(dry_run):
+    """Migrate existing secret notes to the new mystery type.
+
+    Renames _System/Secrets/ to _System/Mysteries/, updates every note's
+    frontmatter from 'type: secret' to 'type: mystery', and rebuilds the
+    entity index.  Run once after upgrading.
+    """
+    cfg   = load_config()
+    vault = get_vault(cfg)
+
+    old_folder = vault / "_System" / "Secrets"
+    new_folder = vault / "_System" / "Mysteries"
+
+    if not old_folder.exists() and not any(True for _ in (new_folder.glob("*.md") if new_folder.exists() else [])):
+        click.echo("No _System/Secrets/ folder found — nothing to migrate.")
+        return
+
+    # Rename folder
+    if old_folder.exists():
+        if dry_run:
+            click.echo(f"[dry] Rename: _System/Secrets -> _System/Mysteries")
+        else:
+            new_folder.mkdir(parents=True, exist_ok=True)
+            for f in old_folder.glob("*.md"):
+                f.rename(new_folder / f.name)
+            try:
+                old_folder.rmdir()
+            except OSError:
+                pass
+            click.echo(f"Renamed _System/Secrets -> _System/Mysteries")
+
+    # Update frontmatter in every note in the new location
+    target_folder = new_folder if not dry_run else old_folder
+    if target_folder.exists():
+        updated = 0
+        for md_file in target_folder.glob("*.md"):
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            fm_match = re.match(r"^---\n(.*?)\n---\n", content, re.DOTALL)
+            if not fm_match:
+                continue
+            try:
+                fm = yaml.safe_load(fm_match.group(1)) or {}
+            except yaml.YAMLError:
+                continue
+            if fm.get("type") != "secret":
+                continue
+            fm["type"] = "mystery"
+            # Rename how_to_reveal -> how_to_resolve if present
+            if "how_to_reveal" in fm:
+                fm["how_to_resolve"] = fm.pop("how_to_reveal")
+            new_yaml = yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            new_content = f"---\n{new_yaml}---\n" + content[fm_match.end():]
+            updated += 1
+            if dry_run:
+                click.echo(f"[dry] Update: {md_file.name}")
+            else:
+                md_file.write_text(new_content, encoding="utf-8")
+        if not dry_run and updated:
+            click.echo(f"Updated {updated} note(s) to type: mystery")
+
+    # Update wikilinks in vault that point to _System/Secrets paths (rare but possible)
+    # and refresh indexes
+    if not dry_run:
+        index = load_index(vault)
+        generate_indexes(vault, force=True)
+        click.echo("Run 'wiki.py reindex' to rebuild the entity index.")
 
 
 @cli.command()

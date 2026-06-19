@@ -67,10 +67,11 @@ Read the full text carefully before extracting. Then identify and extract every 
 - Active missions, rumored jobs, potential hooks
 - Complications and stakes
 
-**Secrets (secret)**
-- Hidden truths — things not publicly known
-- DM-only information implied by the text
-- Deceptions, hidden identities, concealed motivations
+**Mysteries (mystery)**
+- Unanswered questions or unexplained phenomena present in the text
+- Unknown identities, unclear motivations, contradictions without resolution
+- Things a reader of this document would naturally wonder about
+- Do NOT capture DM-only hidden truths — only extract what is observable or inferable from the text itself
 
 ---
 
@@ -115,7 +116,7 @@ Return ONLY valid JSON — no prose, no code fences, no explanation before or af
 {
   "entities": [
     {
-      "type": "npc|pc|place|lore|item|faction|quest|secret",
+      "type": "npc|pc|place|lore|item|faction|quest|event|mystery",
       "name": "Display Name",
       "slug": "display-name-in-kebab-case",
       "aliases": ["other name", "title"],
@@ -256,14 +257,14 @@ Return ONLY valid JSON — no prose, no code fences, no explanation before or af
 }
 ```
 
-**secret**
+**mystery**
 ```json
 {
-  "content": "The hidden truth.",
+  "content": "What is unknown or unexplained — as observable from the text.",
   "related_entities": ["...", "..."],
-  "impact": "What happens if this is revealed.",
-  "how_to_reveal": "How the party could discover this.",
-  "revealed_to": []
+  "clues": ["Evidence or observations already present in the source."],
+  "theories": ["Proposed explanations or speculation present in the text."],
+  "how_to_resolve": "How this might be answered or investigated."
 }
 ```
 
@@ -285,7 +286,7 @@ Before producing your JSON, verify:
 - [ ] Significance scores reflect long-term campaign importance, not just page-count in this text
 - [ ] Significance 4–5 entities have ALL relevant data fields populated with substantive content
 - [ ] Entities that appear frequently or are described in detail have richer entries than briefly-mentioned ones
-- [ ] All secrets are captured, including things implied but not stated
+- [ ] All mysteries are captured — unexplained phenomena, unknown identities, unresolved contradictions observable in the text. Do NOT include DM-only hidden truths.
 - [ ] Every entity has a populated links array connecting it to related entities
 - [ ] Every entity has a `reliability` value — lore from legends/rumors/NPCs should be `rumored`; confirmed historical facts can be `confirmed`
 - [ ] `source` is set for any entity where the origin matters

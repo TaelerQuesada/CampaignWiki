@@ -101,10 +101,17 @@ to be raised. Party did not recover the remains."`
 - History, religion, political structures, prophecies, legends the party learned this session.
 - What the party now knows that they didn't before.
 
-### Secrets
-Secrets are critically important. Capture two kinds:
-1. Things revealed TO the players this session (players now know X).
-2. Things still hidden FROM the players (implied by DM narration, NPC behavior, or world details) — these become DM-only secret notes.
+### Mysteries
+Mysteries are player-facing unknowns — things the party witnessed, heard, or experienced but do not yet have answers to. They are questions, not answers.
+
+Capture:
+- Unexplained phenomena the party observed directly
+- Identities that remain unknown ("who sent the assassin?", "what is the voice?")
+- Events or revelations whose cause or meaning is unclear
+- Contradictions between what NPCs say and what the party witnessed
+- Anything the party is actively wondering about
+
+Do NOT capture DM-only hidden truths or information the players were never exposed to. If the party didn't hear it, see it, or experience it, it is not a mystery — it is DM knowledge and should be omitted entirely.
 
 ### Reliability
 
@@ -159,7 +166,7 @@ The JSON must exactly match this schema:
 {
   "entities": [
     {
-      "type": "npc",
+      "type": "npc|pc|place|lore|item|faction|quest|event|mystery|session",
       "name": "Display Name (capitalize naturally)",
       "slug": "display-name-in-kebab-case",
       "aliases": ["alternate spelling", "nickname"],
@@ -320,14 +327,14 @@ The JSON must exactly match this schema:
 }
 ```
 
-**secret**
+**mystery**
 ```json
 {
-  "content": "The hidden truth.",
+  "content": "What is unknown or unexplained — as witnessed or experienced by the party.",
   "related_entities": ["...", "..."],
-  "impact": "What happens if this is revealed.",
-  "how_to_reveal": "How the party could discover this.",
-  "revealed_to": []
+  "clues": ["Evidence or observations the party already has."],
+  "theories": ["Working theories the party or NPCs have proposed."],
+  "how_to_resolve": "How the party might find answers."
 }
 ```
 
@@ -344,11 +351,11 @@ The JSON must exactly match this schema:
 ## Quality Checklist
 
 Before producing your JSON, verify:
-- [ ] Every named character has an entity (PC and NPC) — do not skip minor ones
+- [ ] Every named character has an entity (PC and NPC)
 - [ ] Every named location has an entity
 - [ ] Exactly one "session" entity exists with a complete events list and cliffhanger
 - [ ] All voice-to-text spelling variants are captured in aliases
-- [ ] All secrets are captured — including DM-side secrets not yet revealed to players
+- [ ] All mysteries are captured — unexplained phenomena, unknown identities, unanswered questions the party is aware of. Do NOT include DM-only hidden truths.
 - [ ] All item finds, quest updates, and lore reveals are recorded
 - [ ] No OOC table talk appears in any entity's data
 - [ ] Every entity has a populated links array
