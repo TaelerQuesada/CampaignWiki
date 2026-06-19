@@ -2805,6 +2805,94 @@ def fill(name, fill_all, auto_yes, force, dry_run, stub_threshold):
 
 
 @cli.command()
+@click.argument("name_a")
+@click.argument("name_b")
+@click.option("--into", "target", default="a", type=click.Choice(["a", "b"]),
+              show_default=True, help="Which note to keep (the other is deleted)")
+@click.option("--dry-run", is_flag=True, help="Preview without writing")
+def merge(name_a, name_b, target, dry_run):
+    """Intelligently merge two notes into one using Claude.
+
+    Finds both notes, combines their content with Claude (deduplicating facts,
+    merging aliases and links), writes the result into the surviving note, and
+    deletes the other.  The surviving note keeps whichever name you specify
+    with --into (default: the first argument).
+
+    \b
+    Examples:
+      wiki.py merge "Steelhammer Clan" "Steelhammer Dwarves"
+      wiki.py merge "Voice A" "Voice B" --into b
+      wiki.py merge "Orc Shaman" "Orc Witch Doctor" --dry-run
+    """
+    cfg    = load_config()
+    vault  = get_vault(cfg)
+    client = get_client(cfg)
+    index  = load_index(vault)
+
+    result_a = find_existing_anywhere(vault, name_a, slugify(name_a))
+    result_b = find_existing_anywhere(vault, name_b, slugify(name_b))
+
+    if not result_a:
+        click.echo(f"Could not find a note for '{name_a}'.", err=True)
+        sys.exit(1)
+    if not result_b:
+        click.echo(f"Could not find a note for '{name_b}'.", err=True)
+        sys.exit(1)
+
+    path_a, _ = result_a
+    path_b, _ = result_b
+
+    if path_a.resolve() == path_b.resolve():
+        click.echo("Both names resolve to the same note — nothing to merge.")
+        return
+
+    # Decide which note survives and which is deleted
+    if target == "a":
+        keep_path, keep_name = path_a, name_a
+        drop_path, drop_name = path_b, name_b
+    else:
+        keep_path, keep_name = path_b, name_b
+        drop_path, drop_name = path_a, name_a
+
+    click.echo(f"Merging '{drop_name}' into '{keep_name}'...")
+    click.echo(f"  Keep : {keep_path.relative_to(vault)}")
+    click.echo(f"  Drop : {drop_path.relative_to(vault)}")
+
+    keep_content = keep_path.read_text(encoding="utf-8")
+    drop_content = drop_path.read_text(encoding="utf-8")
+
+    if dry_run:
+        click.echo("\n[Dry run — no files written]")
+        return
+
+    merged = merge_note(client, keep_content, drop_content, keep_name)
+
+    keep_path.write_text(merged, encoding="utf-8")
+    click.echo(f"  Written: {keep_path.relative_to(vault)}")
+
+    drop_path.unlink()
+    click.echo(f"  Deleted: {drop_path.relative_to(vault)}")
+
+    # Remove dropped note from index
+    drop_slug = slugify(drop_name)
+    drop_id   = f"{drop_path.parent.name.lower()}-{drop_slug}"
+    before = len(index["Entities"])
+    index["Entities"] = [
+        e for e in index["Entities"]
+        if e.get("Name", "").lower() != drop_name.lower()
+        and not e.get("Id", "").endswith(f"-{drop_slug}")
+    ]
+    if len(index["Entities"]) < before:
+        save_index(vault, index)
+        click.echo(f"  Index updated.")
+
+    # Reindex the surviving note to pick up any new aliases/links in the merged content
+    index = load_index(vault)
+    generate_dashboard(vault, index)
+    click.echo("Done.")
+
+
+@cli.command()
 def reindex():
     """Rebuild entity-index.json by scanning all vault markdown files."""
     cfg   = load_config()
