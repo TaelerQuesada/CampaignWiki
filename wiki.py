@@ -392,10 +392,26 @@ def safe_filename(name: str) -> str:
     return s or "unnamed"
 
 FUZZY_THRESHOLD       = 0.82   # same-type fuzzy match (allows spelling variants)
-CROSS_TYPE_THRESHOLD  = 0.92   # cross-type match — must be near-identical to deduplicate
+CROSS_TYPE_THRESHOLD  = 0.95   # cross-type match — must be near-identical to deduplicate
 
 def _name_sim(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+def _cross_type_match(name: str, stem: str, score: float) -> bool:
+    """Extra guard for cross-type dedup: reject if the final distinguishing word differs.
+
+    Catches cases like 'Wildemere Hollow Ledger' (item) vs 'Wildemere Hollow Elder' (npc)
+    where a shared location prefix inflates similarity but the final words are unrelated.
+    """
+    if score < CROSS_TYPE_THRESHOLD:
+        return False
+    a_words = name.lower().split()
+    b_words = stem.lower().split()
+    if a_words and b_words:
+        last_sim = SequenceMatcher(None, a_words[-1], b_words[-1]).ratio()
+        if last_sim < 0.6:
+            return False
+    return True
 
 def find_existing_anywhere(
     vault: Path, name: str, slug: str, own_type: str = ""
@@ -414,7 +430,8 @@ def find_existing_anywhere(
         folder = vault / folder_rel
         if not folder.exists():
             continue
-        threshold = FUZZY_THRESHOLD if (not own_type or etype == own_type) else CROSS_TYPE_THRESHOLD
+        is_cross = bool(own_type and etype != own_type)
+        threshold = CROSS_TYPE_THRESHOLD if is_cross else FUZZY_THRESHOLD
         for f in folder.glob("*.md"):
             stem = f.stem.lower()
             # Exact hit — return immediately
@@ -424,7 +441,11 @@ def find_existing_anywhere(
                 _name_sim(name_lower, stem),
                 _name_sim(slug_lower, stem.replace("-", " ")),
             )
-            if score >= threshold and (best is None or score > best[0]):
+            if score < threshold:
+                continue
+            if is_cross and not _cross_type_match(name_lower, stem, score):
+                continue
+            if best is None or score > best[0]:
                 best = (score, f, etype)
 
     if best:
