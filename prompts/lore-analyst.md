@@ -74,17 +74,19 @@ Read the full text carefully before extracting. Then identify and extract every 
 
 ---
 
-## Significance Scoring
+## Significance Scoring & Output Depth
 
-Score every entity 1–5 based on their likely importance to a long-running AD&D 2e campaign:
+Score every entity 1–5 and write data proportional to that score:
 
-| Score | Meaning |
-|-------|---------|
-| 5 | A PC, or the campaign's primary villain / central location / legendary artifact |
-| 4 | Major recurring character, important faction, significant location or key item |
-| 3 | Supporting cast — named, described, likely to appear again |
-| 2 | Minor detail — brief mention, background color, one-use element |
-| 1 | Throwaway mention — a name dropped once, purely atmospheric |
+| Score | Meaning | Expected data depth |
+|-------|---------|---------------------|
+| 5 | A PC, or the campaign's primary villain / central location / legendary artifact | Every field populated. Multiple sentences per text field. Full relationships, secrets, history. |
+| 4 | Major recurring character, important faction, significant location or key item | All relevant fields populated — description, motivations, relationships, secrets at minimum. |
+| 3 | Supporting cast — named, described, likely to appear again | Core fields populated. Omit fields where nothing is known. |
+| 2 | Minor detail — brief mention, background color, one-use element | Summary + key fields only. Fill what the text gives you; don't pad. |
+| 1 | Throwaway mention — a name dropped once, purely atmospheric | Summary only. |
+
+**The depth rule is a floor, not a ceiling.** If the source text is rich about a particular entity, capture all of it regardless of significance tier. Do not limit entity count — if the text mentions twenty places, extract twenty. Completeness matters more than brevity.
 
 When in doubt, score 3. It is better to give a supporting character a full page than to under-score a recurring NPC.
 
@@ -278,9 +280,11 @@ Return ONLY valid JSON — no prose, no code fences, no explanation before or af
 ## Quality Checklist
 
 Before producing your JSON, verify:
-- [ ] Every distinct named entity has been extracted
+- [ ] Every distinct named entity has been extracted — do not limit count
 - [ ] No two entities describe the same thing under different names — merge them and record aliases
 - [ ] Significance scores reflect long-term campaign importance, not just page-count in this text
+- [ ] Significance 4–5 entities have ALL relevant data fields populated with substantive content
+- [ ] Entities that appear frequently or are described in detail have richer entries than briefly-mentioned ones
 - [ ] All secrets are captured, including things implied but not stated
 - [ ] Every entity has a populated links array connecting it to related entities
 - [ ] Every entity has a `reliability` value — lore from legends/rumors/NPCs should be `rumored`; confirmed historical facts can be `confirmed`

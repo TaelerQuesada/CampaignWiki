@@ -19,6 +19,10 @@ You are an expert AD&D 2nd Edition campaign archivist performing a deep analytic
 
 Your task: read the ENTIRE transcript before extracting anything. Then produce a single, complete JSON document cataloguing every notable campaign entity — characters, locations, items, lore, secrets, quests, and a full session summary.
 
+**Extract everything. Do not limit entity count.** If thirty NPCs appear, extract thirty. If a location has six named rooms, extract six. Completeness matters more than brevity.
+
+**Depth scales with significance.** A throwaway guard needs only a name, summary, and status. A major villain who dominates half the session deserves every field filled in — full description, personality, motivations, relationships, secrets, history. The significance score should directly reflect how much you write: more mentions and more importance means more detail, not just a higher number.
+
 ---
 
 ## Step 1 — Voice-to-Text Cleanup
@@ -130,17 +134,19 @@ Always create exactly one entity of type "session" that summarizes the whole ses
 
 ---
 
-## Step 3 — Significance Scoring
+## Step 3 — Significance Scoring & Output Depth
 
-Score every entity 1–5 before writing it out:
+Score every entity 1–5 and write data proportional to that score:
 
-| Score | Meaning |
-|-------|---------|
-| 5 | PC, or the central entity of this entire session (main villain, key dungeon, primary plot item) |
-| 4 | Clearly important — named, characterized, multiple meaningful interactions or reveals |
-| 3 | Named and present with a detail or two — likely to recur in future sessions |
-| 2 | Brief appearance, minimal information, may not matter again |
-| 1 | Single throwaway mention, unnamed, or purely atmospheric |
+| Score | Meaning | Expected data depth |
+|-------|---------|---------------------|
+| 5 | PC, or the dominant entity of this session (main villain, key dungeon, primary plot item) | Every field populated. Multiple sentences per text field. Full relationships dict, full secrets list, extensive notes. |
+| 4 | Clearly important — named, characterized, multiple meaningful interactions or reveals | All relevant fields populated. At minimum: description, personality, motivations, relationships, any secrets. |
+| 3 | Named and present with a detail or two — likely to recur | Core fields populated: description, role, one or two relationships. Omit fields where nothing is known. |
+| 2 | Brief appearance, minimal information, may not matter again | Summary + status only. Data fields sparse — fill only what the transcript explicitly provides. |
+| 1 | Single throwaway mention, unnamed, or purely atmospheric | Summary only. Minimal data. |
+
+**The depth rule is a floor, not a ceiling.** If a sig-3 NPC has an unusually rich scene, fill in everything the transcript gives you. If a sig-4 entity was only briefly described, don't invent details — write what you have. Let the transcript drive content; let significance drive minimum effort.
 
 ---
 
@@ -338,7 +344,7 @@ The JSON must exactly match this schema:
 ## Quality Checklist
 
 Before producing your JSON, verify:
-- [ ] Every named character has an entity (PC and NPC)
+- [ ] Every named character has an entity (PC and NPC) — do not skip minor ones
 - [ ] Every named location has an entity
 - [ ] Exactly one "session" entity exists with a complete events list and cliffhanger
 - [ ] All voice-to-text spelling variants are captured in aliases
@@ -349,6 +355,8 @@ Before producing your JSON, verify:
 - [ ] Every entity has a `reliability` value (default `rumored` for NPC-sourced info, `confirmed` for party-witnessed events)
 - [ ] Any entity where info was proven wrong this session is marked `reliability: contradicted`
 - [ ] `quote` is populated where a memorable line of dialogue, inscription, or description fits naturally — left empty otherwise
+- [ ] Significance 4–5 entities have ALL relevant data fields populated with substantive content, not placeholders
+- [ ] Frequently mentioned entities have richer entries than rarely mentioned ones — mention count should show in data depth
 - [ ] JSON is valid, complete, and contains no trailing commas or syntax errors
 
 ---
